@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Light Switch Room — Quest 3</title>
+  <script src="https://aframe.io/releases/1.7.1/aframe.min.js"></script>
+  <!-- Reads your hands. You don't need to change it. -->
+  <script src="quest-hands.js"></script>
+
+  <script>
+    /* =========================================================
+       LIGHT SWITCH ROOM
+       The room is dark, lit only by the moon through the window.
+       Walk to the light switch by the door (left stick = walk,
+       right stick = turn), pinch the lever and move your hand:
+       up = lights on, down = lights off.
+       Controllers: the trigger works like a pinch.
+       ========================================================= */
+
+    // THE ROOM, built with three.js: wood floor, walls, a window, a door and a ceiling lamp.
+    // setLights(true / false) turns the lamp on or off with a short fade.
+    AFRAME.registerComponent('cozy-room', {
+      init: function () {
+        const W = 5, D = 5, H = 2.8;
+        const room = new THREE.Group();
+        const add = (geo, mat, x, y, z) => {
+          const m = new THREE.Mesh(geo, mat);
+          m.position.set(x, y, z);
+          m.castShadow = m.receiveShadow = true;
+          room.add(m);
+          return m;
+        };
+
+        // Wood floor: planks drawn with code on a canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 512;
+        const ctx = canvas.getContext('2d');
+        for (let row = 0; row < 8; row++) {
+          for (let col = -1; col < 3; col++) {
+            const shade = 60 + ((row * 7 + col * 13) % 5) * 8;
+            ctx.fillStyle = `rgb(${shade + 80}, ${shade + 40}, ${shade})`;
+            const x = col * 256 + (row % 2) * 128;
+            ctx.fillRect(x, row * 64, 256, 64);
+            ctx.strokeStyle = 'rgba(40, 20, 5, 0.6)';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(x, row * 64, 256, 64);
+          }
+        }
+        const planks = new THREE.CanvasTexture(canvas);
+        planks.wrapS = planks.wrapT = THREE.RepeatWrapping;
+        planks.repeat.set(2.5, 2.5);
+        planks.colorSpace = THREE.SRGBColorSpace;
+        const floor = add(new THREE.PlaneGeometry(W, D),
+          new THREE.MeshStandardMaterial({ map: planks, roughness: 0.7 }), 0, 0.002, 0);
+        floor.rotation.x = -Math.PI / 2;
+
+        // Walls and ceiling: a box seen from the inside
+        add(new THREE.BoxGeometry(W, H, D),
+          new THREE.MeshStandardMaterial({ color: '#E8E2D6', side: THREE.BackSide }), 0, H / 2, 0);
+
+        // A rug in the middle
+        const rug = add(new THREE.CircleGeometry(1.1, 48),
+          new THREE.MeshStandardMaterial({ color: '#8C3B3B', roughness: 1 }), 0, 0.006, 0);
+        rug.rotation.x = -Math.PI / 2;
+
+        // Window on the left wall: a night sky behind a wooden frame
+        const sky = add(new THREE.PlaneGeometry(1.3, 1.1),
+          new THREE.MeshBasicMaterial({ color: '#22355F' }), -W / 2 + 0.01, 1.55, 0);
+        sky.rotation.y = Math.PI / 2;
+        const wood = new THREE.MeshStandardMaterial({ color: '#5C3D22', roughness: 0.6 });
+        add(new THREE.BoxGeometry(0.06, 0.06, 1.42), wood, -W / 2 + 0.03, 2.13, 0);
+        add(new THREE.BoxGeometry(0.06, 0.06, 1.42), wood, -W / 2 + 0.03, 0.97, 0);
+        add(new THREE.BoxGeometry(0.06, 1.22, 0.06), wood, -W / 2 + 0.03, 1.55, 0.68);
+        add(new THREE.BoxGeometry(0.06, 1.22, 0.06), wood, -W / 2 + 0.03, 1.55, -0.68);
+        add(new THREE.BoxGeometry(0.04, 1.1, 0.03), wood, -W / 2 + 0.03, 1.55, 0);
+
+        // A door on the front wall, next to the light switch
+        add(new THREE.BoxGeometry(0.9, 2.05, 0.04), wood, -1.5, 1.025, -D / 2 + 0.02);
+        add(new THREE.SphereGeometry(0.03, 16, 12),
+          new THREE.MeshStandardMaterial({ color: '#C9A64B', metalness: 0.8, roughness: 0.3 }),
+          -1.15, 1.0, -D / 2 + 0.06);
+
+        // Ceiling lamp: a cord, a lampshade and a bulb
+        add(new THREE.CylinderGeometry(0.005, 0.005, 0.5, 6),
+          new THREE.MeshStandardMaterial({ color: '#222222' }), 0, H - 0.25, 0);
+        const shade = add(new THREE.ConeGeometry(0.22, 0.2, 32, 1, true),
+          new THREE.MeshStandardMaterial({ color: '#2F2F2F', side: THREE.DoubleSide, roughness: 0.5 }),
+          0, H - 0.55, 0);
+        shade.castShadow = false;
+        this.bulb = add(new THREE.SphereGeometry(0.05, 16, 12),
+          new THREE.MeshStandardMaterial({ color: '#FFF8E8', emissive: '#FFD9A0', emissiveIntensity: 0 }),
+          0, H - 0.62, 0);
+        this.bulb.castShadow = false;
+
+        // LIGHTS
+        // Moonlight through the window: always on, soft and blue
+        const moon = new THREE.DirectionalLight('#9DB4FF', 0.5);
+        moon.position.set(-4, 3, 0.5);
+        room.add(moon);
+        // A fill light that changes from blue moonlight to warm lamp light
+        this.fill = new THREE.HemisphereLight('#9FB4FF', '#3A3A4A', 0.25);
+        room.add(this.fill);
+        // The lamp itself: a warm point light that casts shadows
+        this.lamp = new THREE.PointLight('#FFD9A0', 0, 0, 2);
+        this.lamp.position.set(0, H - 0.65, 0);
+        this.lamp.castShadow = true;
+        this.lamp.shadow.mapSize.set(1024, 1024);
+        room.add(this.lamp);
+
+        this.el.setObject3D('room', room);
+        const renderer = this.el.sceneEl.renderer;
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+        this.level = 0;      // 0 = off, 1 = on (animates)
+        this.target = 0;
+        this.moonSky = new THREE.Color('#9FB4FF');
+        this.warmSky = new THREE.Color('#FFF1DC');
+      },
+
+      setLights: function (on) {
+        this.target = on ? 1 : 0;
+      },
+
+      tick: function (time, delta) {
+        if (!delta || this.level === this.target) return;
+        // Fade quickly toward on or off (about 0.15 s), like a real bulb
+        const step = delta / 150;
+        this.level = this.target > this.level
+          ? Math.min(this.target, this.level + step)
+          : Math.max(this.target, this.level - step);
+        const L = this.level;
+        this.lamp.intensity = 18 * L;
+        this.bulb.material.emissiveIntensity = 3 * L;
+        this.fill.intensity = 0.25 + 1.2 * L;
+        this.fill.color.lerpColors(this.moonSky, this.warmSky, L);
+      }
+    });
+
+    // THE LIGHT SWITCH: pinch the lever and move your hand up (on) or down (off).
+    // The lever follows your finger. Past the middle it snaps over with a click.
+    // Let go before the middle and it springs back, like a real switch.
+    const SWITCH_TILT = 0.45;   // how far the lever tilts each way (radians, about 26 degrees)
+
+    AFRAME.registerComponent('light-switch', {
+      init: function () {
+        const plastic = new THREE.MeshStandardMaterial({ color: '#F5F2EA', roughness: 0.35 });
+        const group = new THREE.Group();
+
+        // Wall plate with rounded look
+        const plate = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.12, 0.008), plastic);
+        plate.castShadow = plate.receiveShadow = true;
+        group.add(plate);
+
+        // The lever turns around this hinge
+        this.hinge = new THREE.Group();
+        this.hinge.position.z = 0.006;
+        group.add(this.hinge);
+        const lever = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.012, 0.03), plastic);
+        lever.position.z = 0.015;
+        lever.castShadow = true;
+        this.hinge.add(lever);
+        this.tip = new THREE.Object3D();          // the end of the lever, where you pinch
+        this.tip.position.z = 0.03;
+        this.hinge.add(this.tip);
+
+        // Small orange locator light, so you can find the switch in the dark
+        this.led = new THREE.Mesh(new THREE.SphereGeometry(0.003, 8, 6),
+          new THREE.MeshBasicMaterial({ color: '#FF8A2A' }));
+        this.led.position.set(0, -0.045, 0.005);
+        group.add(this.led);
+
+        this.el.setObject3D('mesh', group);
+
+        this.on = false;
+        this.angle = SWITCH_TILT;                  // down = off (lever tip pointing down)
+        this.hand = null;
+        this.tipPos = new THREE.Vector3();
+        this.click = () => this.el.components.sound.playSound();
+
+        // Pinch near the lever = take hold of it
+        this.el.sceneEl.addEventListener('pinchstart', (e) => {
+          const h = QuestHands[e.detail.hand];
+          this.tip.getWorldPosition(this.tipPos);
+          if (this.hand || !h.tracked || h.tip.distanceTo(this.tipPos) > 0.06) return;
+          this.hand = e.detail.hand;
+          this.startY = h.tip.y;
+          this.startAngle = this.angle;
+        });
+        this.el.sceneEl.addEventListener('pinchend', (e) => {
+          if (this.hand === e.detail.hand) this.hand = null;
+        });
+
+        // On a computer: click the switch
+        this.el.addEventListener('click', () => this.flip(!this.on));
+      },
+
+      flip: function (on) {
+        this.on = on;
+        this.angle = on ? -SWITCH_TILT : SWITCH_TILT;   // snap to the other side
+        this.hand = null;                                // one flick per pinch
+        this.click();
+        document.querySelector('[cozy-room]').components['cozy-room'].setLights(on);
+        this.led.visible = !on;
+      },
+
+      tick: function (time, delta) {
+        if (!delta) return;
+        if (this.hand) {
+          // The lever follows your hand: 1 cm up tilts it about 7 degrees up
+          const h = QuestHands[this.hand];
+          let a = this.startAngle - (h.tip.y - this.startY) * 12;
+          a = Math.max(-SWITCH_TILT, Math.min(SWITCH_TILT, a));
+          if (!this.on && a < 0) this.flip(true);         // pushed up past the middle
+          else if (this.on && a > 0) this.flip(false);    // pushed down past the middle
+          else this.angle = a;
+        } else {
+          // Not held: spring back to where it rests
+          const rest = this.on ? -SWITCH_TILT : SWITCH_TILT;
+          this.angle += (rest - this.angle) * Math.min(1, delta / 60);
+        }
+        this.hinge.rotation.x = this.angle;
+      }
+    });
+
+    // JOYSTICK (controllers, already done for you)
+    // Left stick = walk where you are looking. Right stick = turn 45 degrees.
+    AFRAME.registerComponent('stick-walk', {
+      schema: { speed: { default: 1.5 } },   // meters per second
+      init: function () {
+        this.forward = new THREE.Vector3();
+        this.side = new THREE.Vector3();
+        this.head = new THREE.Vector3();
+        this.up = new THREE.Vector3(0, 1, 0);
+        this.canTurn = true;
+      },
+      tick: function (time, delta) {
+        const scene = this.el.sceneEl, session = scene.xrSession;
+        if (!scene.is('vr-mode') || !session || !delta) return;
+        const rig = this.el.object3D, camera = scene.camera;
+
+        for (const source of session.inputSources) {
+          const axes = source.gamepad ? source.gamepad.axes : [];
+          const x = axes[2] || 0, y = axes[3] || 0;   // thumbstick
+
+          // Left stick: walk in the direction you are looking
+          if (source.handedness === 'left' && Math.hypot(x, y) > 0.15) {
+            camera.getWorldDirection(this.forward);
+            this.forward.y = 0;
+            this.forward.normalize();
+            this.side.crossVectors(this.forward, this.up);
+            const step = this.data.speed * delta / 1000;
+            rig.position.addScaledVector(this.forward, -y * step);
+            rig.position.addScaledVector(this.side, x * step);
+          }
+
+          // Right stick: snap turn 45 degrees, around your head
+          if (source.handedness === 'right') {
+            if (Math.abs(x) > 0.7 && this.canTurn) {
+              this.canTurn = false;
+              const angle = (x > 0 ? -1 : 1) * Math.PI / 4;
+              this.head.setFromMatrixPosition(camera.matrixWorld);
+              rig.position.sub(this.head).applyAxisAngle(this.up, angle).add(this.head);
+              rig.rotation.y += angle;
+            }
+            if (Math.abs(x) < 0.3) this.canTurn = true;
+          }
+        }
+      }
+    });
+  </script>
+</head>
+<body>
+  <a-scene quest-hands webxr="optionalFeatures: hand-tracking"
+           cursor="rayOrigin: mouse" raycaster="objects: .clickable"
+           light="defaultLightsEnabled: false" background="color: #05070D">
+
+    <a-assets>
+      <audio id="click-file" src="sounds/click.mp3" preload="auto"></audio>
+    </a-assets>
+
+    <!-- The room, made with three.js -->
+    <a-entity cozy-room></a-entity>
+
+    <!-- The light switch, on the front wall next to the door, at 1.2 m high -->
+    <a-entity class="clickable" light-switch position="-0.75 1.2 -2.49"
+              sound="src: #click-file; poolSize: 3"></a-entity>
+
+    <!-- Instructions on the wall, above the switch -->
+    <a-text value="LEFT STICK: WALK    RIGHT STICK: TURN" position="-0.75 1.75 -2.49"
+            align="center" width="1.6" color="#C9D3F2"></a-text>
+    <a-text value="PINCH THE SWITCH: UP = ON, DOWN = OFF" position="-0.75 1.62 -2.49"
+            align="center" width="1.6" color="#C9D3F2"></a-text>
+
+    <!-- You: the rig carries your camera and hands. The joysticks move the rig -->
+    <a-entity id="rig" stick-walk position="0 0 1.3">
+      <a-entity camera look-controls wasd-controls position="0 1.6 0"></a-entity>
+      <a-entity hand-tracking-controls="hand: left"></a-entity>
+      <a-entity hand-tracking-controls="hand: right"></a-entity>
+      <a-entity hand-controls="hand: left"></a-entity>
+      <a-entity hand-controls="hand: right"></a-entity>
+    </a-entity>
+
+  </a-scene>
+</body>
+</html>
